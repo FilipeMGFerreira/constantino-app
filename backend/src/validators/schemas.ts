@@ -48,13 +48,19 @@ export const despesaSchema = z.object({
   categoriaId: z.string().min(1),
   valor: z.number().positive(),
   data: z.string().or(z.date()),
-  pagoPor: z.string().min(1),
+  pagoPor: z.string().min(1).optional(),
   participantes: z.array(participanteSchema).min(1),
   tipoDivisao: z.enum(['IGUAL', 'PERCENTAGEM', 'VALOR']).default('IGUAL'),
+  modoPagamento: z.enum(['ADIANTADO', 'PARTILHADO']).default('ADIANTADO'),
   recorrente: z.boolean().optional(),
   periodicidade: z.enum(['MENSAL', 'TRIMESTRAL', 'SEMESTRAL', 'ANUAL']).optional(),
   estado: z.enum(['PAGA', 'PENDENTE', 'ANULADA']).optional(),
   observacoes: z.string().optional(),
+});
+
+export const registarPagamentoSchema = z.object({
+  valor: z.number().positive(),
+  habitanteId: z.string().min(1).optional(),
 });
 
 export const configuracaoSchema = z.object({

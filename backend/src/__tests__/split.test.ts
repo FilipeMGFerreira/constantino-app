@@ -1,4 +1,4 @@
-import { calcularDivisao, minimizarTransferencias } from '../services/despesa-split.service';
+import { calcularDivisao, minimizarTransferencias, aplicarLiquidacoes } from '../services/despesa-split.service';
 
 describe('calcularDivisao', () => {
   it('divide igualmente e ajusta o último cêntimo', () => {
@@ -24,7 +24,6 @@ describe('calcularDivisao', () => {
 
 describe('minimizarTransferencias', () => {
   it('calcula acertos João/Maria/Pedro', () => {
-    // João paid 600, Maria 200, Pedro 100 — equal split 300 each
     const transfers = minimizarTransferencias([
       { habitanteId: 'joao', pago: 600, devido: 300, saldo: 300 },
       { habitanteId: 'maria', pago: 200, devido: 300, saldo: -100 },
@@ -38,5 +37,26 @@ describe('minimizarTransferencias', () => {
       ])
     );
     expect(transfers).toHaveLength(2);
+  });
+});
+
+describe('aplicarLiquidacoes', () => {
+  it('regulariza saldos depois de um acerto pago', () => {
+    const saldos = aplicarLiquidacoes(
+      [
+        { habitanteId: 'joao', pago: 600, devido: 300, saldo: 300 },
+        { habitanteId: 'maria', pago: 200, devido: 300, saldo: -100 },
+        { habitanteId: 'pedro', pago: 100, devido: 300, saldo: -200 },
+      ],
+      [
+        { deHabitanteId: 'maria', paraHabitanteId: 'joao', valor: 100 },
+        { deHabitanteId: 'pedro', paraHabitanteId: 'joao', valor: 200 },
+      ]
+    );
+
+    expect(saldos.find((s) => s.habitanteId === 'joao')?.saldo).toBeCloseTo(0, 2);
+    expect(saldos.find((s) => s.habitanteId === 'maria')?.saldo).toBeCloseTo(0, 2);
+    expect(saldos.find((s) => s.habitanteId === 'pedro')?.saldo).toBeCloseTo(0, 2);
+    expect(minimizarTransferencias(saldos)).toHaveLength(0);
   });
 });

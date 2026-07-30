@@ -29,6 +29,7 @@ export function calcularDivisao(
         habitanteId: new Types.ObjectId(p.habitanteId),
         percentagem: roundMoney((valor / valorTotal) * 100),
         valor,
+        valorPago: 0,
       };
     });
   }
@@ -50,6 +51,7 @@ export function calcularDivisao(
         habitanteId: new Types.ObjectId(p.habitanteId),
         percentagem: pct,
         valor,
+        valorPago: 0,
       };
     });
   }
@@ -65,6 +67,7 @@ export function calcularDivisao(
       habitanteId: new Types.ObjectId(p.habitanteId),
       percentagem: valorTotal ? roundMoney((valor / valorTotal) * 100) : 0,
       valor,
+      valorPago: 0,
     };
   });
 }
@@ -80,6 +83,32 @@ export interface Transferencia {
   de: string;
   para: string;
   valor: number;
+}
+
+/** Após um pagamento de `de` → `para`, o saldo de quem pagou sobe e o de quem recebeu desce. */
+export function aplicarLiquidacoes(
+  saldos: SaldoHabitante[],
+  liquidacoes: { deHabitanteId: string; paraHabitanteId: string; valor: number }[]
+): SaldoHabitante[] {
+  const map = new Map(saldos.map((s) => [s.habitanteId, { ...s }]));
+
+  const ensure = (id: string) => {
+    if (!map.has(id)) {
+      map.set(id, { habitanteId: id, pago: 0, devido: 0, saldo: 0 });
+    }
+    return map.get(id)!;
+  };
+
+  for (const l of liquidacoes) {
+    const valor = roundMoney(l.valor);
+    if (valor <= 0) continue;
+    const de = ensure(l.deHabitanteId);
+    const para = ensure(l.paraHabitanteId);
+    de.saldo = roundMoney(de.saldo + valor);
+    para.saldo = roundMoney(para.saldo - valor);
+  }
+
+  return [...map.values()];
 }
 
 /** Minimiza transferências (greedy credores vs devedores). */

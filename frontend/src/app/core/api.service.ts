@@ -89,6 +89,18 @@ export class ApiService {
       .pipe(map((r) => r.data));
   }
 
+  registarPagamento(id: string, body: { valor: number; habitanteId?: string }) {
+    return this.http
+      .post<ApiResponse<Despesa>>(`${this.base}/despesas/${id}/pagamentos`, body)
+      .pipe(map((r) => r.data));
+  }
+
+  pararRecorrencia(id: string) {
+    return this.http
+      .post<ApiResponse<Despesa>>(`${this.base}/despesas/${id}/parar-recorrencia`, {})
+      .pipe(map((r) => r.data));
+  }
+
   uploadAnexo(id: string, file: File) {
     const fd = new FormData();
     fd.append('file', file);

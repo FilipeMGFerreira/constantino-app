@@ -2,11 +2,9 @@ import { Despesa } from '../models/despesa.model';
 import { Habitante } from '../models/habitante.model';
 import { Categoria } from '../models/categoria.model';
 import { AuditLog } from '../models/audit-log.model';
+import { AcertoLiquidacao } from '../models/acerto.model';
 import { roundMoney } from '../utils/helpers';
-import {
-  minimizarTransferencias,
-  SaldoHabitante,
-} from './despesa-split.service';
+import { aplicarLiquidacoes, SaldoHabitante } from './despesa-split.service';
 
 export async function getDashboard(
   casaId: string,
@@ -61,8 +59,10 @@ export async function getDashboard(
   const pagos = new Map<string, number>();
   const gastos = new Map<string, number>();
   for (const d of despesasMes) {
-    const pagoPor = d.pagoPor.toString();
-    pagos.set(pagoPor, (pagos.get(pagoPor) ?? 0) + d.valor);
+    if (d.pagoPor) {
+      const pagoPor = d.pagoPor.toString();
+      pagos.set(pagoPor, (pagos.get(pagoPor) ?? 0) + d.valor);
+    }
     for (const p of d.participantes) {
       const hid = p.habitanteId.toString();
       gastos.set(hid, (gastos.get(hid) ?? 0) + p.valor);
@@ -75,10 +75,38 @@ export async function getDashboard(
   const maisPagouEntry = [...pagos.entries()].sort((a, b) => b[1] - a[1])[0];
   const maisGastouEntry = [...gastos.entries()].sort((a, b) => b[1] - a[1])[0];
 
-  const saldos = buildSaldos(despesasMes.filter((d) => d.estado === 'PAGA'));
+  const adiantadasPagas = despesasMes.filter(
+    (d) => d.estado === 'PAGA' && (d.modoPagamento || 'ADIANTADO') === 'ADIANTADO' && d.pagoPor
+  );
+  const saldosBrutos = buildSaldos(adiantadasPagas);
+  const liquidacoes = await AcertoLiquidacao.find({
+    casaId,
+    mes,
+    ano,
+    liquidado: true,
+  }).lean();
+  const saldos = aplicarLiquidacoes(
+    saldosBrutos,
+    liquidacoes.map((l) => ({
+      deHabitanteId: l.deHabitanteId.toString(),
+      paraHabitanteId: l.paraHabitanteId.toString(),
+      valor: l.valor,
+    }))
+  );
   const meuSaldo = habitanteId
     ? saldos.find((s) => s.habitanteId === habitanteId)
     : null;
+
+  let porPagar = 0;
+  if (habitanteId) {
+    for (const d of despesasMes) {
+      if ((d.modoPagamento || 'ADIANTADO') !== 'PARTILHADO') continue;
+      const part = d.participantes.find((p) => p.habitanteId.toString() === habitanteId);
+      if (!part) continue;
+      porPagar += Math.max(0, roundMoney(part.valor - (part.valorPago || 0)));
+    }
+    porPagar = roundMoney(porPagar);
+  }
 
   const ultimas = [...despesasMes]
     .sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())
@@ -97,6 +125,7 @@ export async function getDashboard(
     totalAno,
     mediaDiaria,
     numeroDespesas: despesasMes.length,
+    porPagar,
     categoriaMaiorCusto: maiorCat
       ? { id: maiorCat._id?.toString(), nome: maiorCat.nome, cor: maiorCat.cor, icone: maiorCat.icone, total: maiorCat.total }
       : null,
@@ -127,21 +156,35 @@ export async function getDashboard(
           devo: meuSaldo.saldo < 0 ? roundMoney(-meuSaldo.saldo) : 0,
           devemMe: meuSaldo.saldo > 0 ? meuSaldo.saldo : 0,
         }
-      : null,
+      : habitanteId
+        ? { pago: 0, devido: 0, saldo: 0, devo: 0, devemMe: 0 }
+        : null,
     saldoGeral: saldos,
     ultimasDespesas: ultimas.map((d) => {
       const cat = catMap.get(d.categoriaId.toString());
+      const modo = d.modoPagamento || 'ADIANTADO';
+      const parts = d.participantes.map((p) => ({
+        valor: p.valor,
+        valorPago: p.valorPago || 0,
+        emDivida: Math.max(0, roundMoney(p.valor - (p.valorPago || 0))),
+      }));
       return {
         id: d._id.toString(),
         descricao: d.descricao,
         valor: d.valor,
         data: d.data,
         estado: d.estado,
+        modoPagamento: modo,
         categoriaId: d.categoriaId.toString(),
         categoriaNome: cat?.nome ?? null,
         categoriaIcone: cat?.icone ?? 'payments',
         categoriaCor: cat?.cor ?? '#2B2B2B',
-        pagoPor: d.pagoPor.toString(),
+        pagoPor: d.pagoPor?.toString() ?? null,
+        totalEmDivida: roundMoney(parts.reduce((s, p) => s + p.emDivida, 0)),
+        participantesQuitados: parts.filter((p) => p.emDivida <= 0.02).length,
+        participantesCount: parts.length,
+        recorrente: d.recorrente,
+        despesaOrigemId: d.despesaOrigemId?.toString() ?? null,
       };
     }),
     atividade: atividade.map((a) => ({
@@ -155,7 +198,10 @@ export async function getDashboard(
 }
 
 function buildSaldos(
-  despesas: { pagoPor: { toString(): string }; participantes: { habitanteId: { toString(): string }; valor: number }[] }[]
+  despesas: {
+    pagoPor?: { toString(): string } | null;
+    participantes: { habitanteId: { toString(): string }; valor: number }[];
+  }[]
 ): SaldoHabitante[] {
   const map = new Map<string, SaldoHabitante>();
 
@@ -165,6 +211,7 @@ function buildSaldos(
   };
 
   for (const d of despesas) {
+    if (!d.pagoPor) continue;
     const pagador = ensure(d.pagoPor.toString());
     pagador.pago = roundMoney(pagador.pago + d.participantes.reduce((s, p) => s + p.valor, 0));
     for (const p of d.participantes) {

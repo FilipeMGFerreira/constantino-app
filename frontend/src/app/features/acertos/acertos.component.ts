@@ -47,13 +47,8 @@ import { MonthNavComponent } from '../../shared/ui/month-nav.component';
           <div class="transfer">
             <div class="grow">
               <div class="t">{{ t.texto }}</div>
-              @if (t.liquidado) {
-                <span class="chip paga">Resolvido</span>
-              }
             </div>
-            @if (!t.liquidado) {
-              <button mat-flat-button class="btn-primary" type="button" (click)="liquidar(t)">Resolver</button>
-            }
+            <button mat-flat-button class="btn-primary" type="button" (click)="liquidar(t)">Resolver</button>
           </div>
         } @empty {
           <div class="empty-state">
@@ -62,6 +57,20 @@ import { MonthNavComponent } from '../../shared/ui/month-nav.component';
           </div>
         }
       </div>
+
+      @if (liquidacoes().length) {
+        <div class="section-title"><h3>Resolvidos</h3></div>
+        <div class="surface">
+          @for (l of liquidacoes(); track l.id) {
+            <div class="transfer">
+              <div class="grow">
+                <div class="t">{{ l.texto }}</div>
+                <span class="chip paga">Resolvido</span>
+              </div>
+            </div>
+          }
+        </div>
+      }
     </div>
   `,
   styles: [
@@ -119,6 +128,7 @@ export class AcertosComponent {
   period = inject(PeriodService);
   saldos = signal<any[]>([]);
   transferencias = signal<any[]>([]);
+  liquidacoes = signal<any[]>([]);
   private reloadTick = signal(0);
 
   constructor() {
@@ -128,6 +138,7 @@ export class AcertosComponent {
       this.api.getAcertos(mes, ano).subscribe((d: any) => {
         this.saldos.set(d.saldos || []);
         this.transferencias.set(d.transferencias || []);
+        this.liquidacoes.set(d.liquidacoes || []);
       });
     });
   }

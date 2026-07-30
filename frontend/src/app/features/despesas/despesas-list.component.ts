@@ -67,6 +67,14 @@ import { Despesa } from '../../models/models';
                   <span class="chip" [class.paga]="d.estado === 'PAGA'" [class.pendente]="d.estado === 'PENDENTE'">{{
                     d.estado === 'PAGA' ? 'Paga' : 'Pendente'
                   }}</span>
+                  @if (d.modoPagamento === 'PARTILHADO') {
+                    <span class="chip mode">Partilhada · {{ d.participantesQuitados || 0 }}/{{ d.participantes.length }}</span>
+                  }
+                  @if (d.recorrente) {
+                    <span class="chip mode">Recorrente</span>
+                  } @else if (d.despesaOrigemId) {
+                    <span class="chip mode">Cópia</span>
+                  }
                 </div>
               </div>
               <strong>{{ d.valor | currency: 'EUR' }}</strong>
@@ -74,7 +82,15 @@ import { Despesa } from '../../models/models';
             <button mat-icon-button [matMenuTriggerFor]="menu" aria-label="Ações"><mat-icon>more_vert</mat-icon></button>
             <mat-menu #menu="matMenu">
               <button mat-menu-item (click)="duplicar(d)"><mat-icon>content_copy</mat-icon> Duplicar</button>
-              <button mat-menu-item (click)="toggleEstado(d)"><mat-icon>check_circle</mat-icon> Alternar estado</button>
+              @if ((d.modoPagamento || 'ADIANTADO') === 'ADIANTADO') {
+                <button mat-menu-item (click)="toggleEstado(d)"><mat-icon>check_circle</mat-icon> Alternar estado</button>
+              }
+              @if (d.recorrente) {
+                <button mat-menu-item (click)="pararRecorrencia(d)"><mat-icon>event_busy</mat-icon> Parar recorrência</button>
+              }
+              @if (d.despesaOrigemId) {
+                <a mat-menu-item [routerLink]="['/despesas', d.despesaOrigemId]"><mat-icon>repeat</mat-icon> Ver template</a>
+              }
               <button mat-menu-item (click)="remover(d)"><mat-icon>delete</mat-icon> Anular</button>
             </mat-menu>
           </div>
@@ -153,11 +169,16 @@ import { Despesa } from '../../models/models';
       }
       .s {
         display: flex;
+        flex-wrap: wrap;
         gap: 8px;
         align-items: center;
         font-size: 12px;
         color: var(--ink-soft);
         margin-top: 3px;
+      }
+      .chip.mode {
+        background: var(--sand-deep);
+        color: var(--ink-soft);
       }
       strong {
         font-family: var(--font-display);
@@ -222,6 +243,23 @@ export class DespesasListComponent {
       this.toast.info(estado === 'PAGA' ? 'Marcada como paga' : 'Marcada como pendente');
       this.reloadTick.update((n) => n + 1);
     });
+  }
+
+  pararRecorrencia(d: Despesa) {
+    this.dialogs
+      .confirm({
+        title: 'Parar recorrência?',
+        message: `"${d.descricao}" deixa de gerar cópias novas. O histórico mantém-se.`,
+        confirmLabel: 'Parar',
+        icon: 'event_busy',
+      })
+      .pipe(filter(Boolean))
+      .subscribe(() => {
+        this.api.pararRecorrencia(d.id).subscribe(() => {
+          this.toast.success('Recorrência parada');
+          this.reloadTick.update((n) => n + 1);
+        });
+      });
   }
 
   remover(d: Despesa) {

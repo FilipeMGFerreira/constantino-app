@@ -8,6 +8,7 @@ import {
   despesaSchema,
   configuracaoSchema,
   liquidarAcertoSchema,
+  registarPagamentoSchema,
 } from '../validators/schemas';
 import * as habitanteService from '../services/habitante.service';
 import * as categoriaService from '../services/categoria.service';
@@ -238,6 +239,38 @@ router.post('/despesas/:id/duplicar', async (req, res, next) => {
     res.status(201).json({
       success: true,
       data: await despesaService.duplicarDespesa(
+        req.user!.casaId!,
+        req.user!.userId,
+        paramId(req)
+      ),
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/despesas/:id/pagamentos', validate(registarPagamentoSchema), async (req, res, next) => {
+  try {
+    res.json({
+      success: true,
+      data: await despesaService.registarPagamento(
+        req.user!.casaId!,
+        req.user!.userId,
+        paramId(req),
+        req.body,
+        req.user!.habitanteId
+      ),
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/despesas/:id/parar-recorrencia', async (req, res, next) => {
+  try {
+    res.json({
+      success: true,
+      data: await despesaService.pararRecorrencia(
         req.user!.casaId!,
         req.user!.userId,
         paramId(req)

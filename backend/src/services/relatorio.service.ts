@@ -34,7 +34,7 @@ async function loadData(
     descricao: d.descricao,
     categoria: catMap.get(d.categoriaId.toString()) ?? '',
     valor: d.valor,
-    pagoPor: habMap.get(d.pagoPor.toString()) ?? '',
+    pagoPor: d.pagoPor ? habMap.get(d.pagoPor.toString()) ?? '' : 'Partilhada',
     estado: d.estado,
   }));
 }

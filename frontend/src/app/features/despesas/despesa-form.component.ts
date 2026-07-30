@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators, FormArray } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
@@ -6,10 +6,12 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { CurrencyPipe } from '@angular/common';
+import { filter } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { AuthService } from '../../core/auth.service';
 import { ToastService } from '../../shared/ui/toast.service';
-import { Categoria, Habitante } from '../../models/models';
+import { DialogService } from '../../shared/ui/dialog.service';
+import { Categoria, Despesa, Habitante, Participante } from '../../models/models';
 
 @Component({
   selector: 'app-despesa-form',
@@ -28,7 +30,25 @@ import { Categoria, Habitante } from '../../models/models';
       <a routerLink="/despesas" class="back"><mat-icon>arrow_back</mat-icon> Despesas</a>
       <h2>{{ id() ? 'Editar' : 'Nova despesa' }}</h2>
 
+      @if (despesaOrigemId()) {
+        <a class="origin-link" [routerLink]="['/despesas', despesaOrigemId()]">
+          <mat-icon>repeat</mat-icon>
+          Gerada a partir de uma recorrente — ver template
+        </a>
+      }
+
       <form [formGroup]="form" (ngSubmit)="save()" class="surface form">
+        <div class="ct-label">Modo de pagamento</div>
+        <mat-button-toggle-group formControlName="modoPagamento" (change)="onModoChange()">
+          <mat-button-toggle value="ADIANTADO">Adiantada</mat-button-toggle>
+          <mat-button-toggle value="PARTILHADO">Partilhada</mat-button-toggle>
+        </mat-button-toggle-group>
+        @if (form.value.modoPagamento === 'PARTILHADO') {
+          <p class="help">Ninguém adiantou o total — cada um marca o que pagou da sua quota.</p>
+        } @else {
+          <p class="help">Alguém pagou o total; os outros ficam a dever-lhe nos acertos.</p>
+        }
+
         <label class="ct-field">
           <span class="ct-label">Descrição</span>
           <div class="ct-control">
@@ -66,29 +86,31 @@ import { Categoria, Habitante } from '../../models/models';
           </div>
         </label>
 
-        <label class="ct-field">
-          <span class="ct-label">Pago por</span>
-          <div class="ct-control">
-            <mat-icon>person_outline</mat-icon>
-            <select formControlName="pagoPor">
-              <option value="" disabled>Escolher…</option>
-              @for (h of habitantes(); track h.id) {
-                <option [value]="h.id">{{ h.nome }}</option>
-              }
-            </select>
-          </div>
-        </label>
+        @if (form.value.modoPagamento === 'ADIANTADO') {
+          <label class="ct-field">
+            <span class="ct-label">Pago por</span>
+            <div class="ct-control">
+              <mat-icon>person_outline</mat-icon>
+              <select formControlName="pagoPor">
+                <option value="" disabled>Escolher…</option>
+                @for (h of habitantes(); track h.id) {
+                  <option [value]="h.id">{{ h.nome }}</option>
+                }
+              </select>
+            </div>
+          </label>
 
-        <label class="ct-field">
-          <span class="ct-label">Estado</span>
-          <div class="ct-control">
-            <mat-icon>flag</mat-icon>
-            <select formControlName="estado">
-              <option value="PAGA">Paga</option>
-              <option value="PENDENTE">Pendente</option>
-            </select>
-          </div>
-        </label>
+          <label class="ct-field">
+            <span class="ct-label">Estado</span>
+            <div class="ct-control">
+              <mat-icon>flag</mat-icon>
+              <select formControlName="estado">
+                <option value="PAGA">Paga</option>
+                <option value="PENDENTE">Pendente</option>
+              </select>
+            </div>
+          </label>
+        }
 
         <div class="ct-label">Divisão</div>
         <mat-button-toggle-group formControlName="tipoDivisao" (change)="rebuildParts()">
@@ -144,7 +166,70 @@ import { Categoria, Habitante } from '../../models/models';
         <button mat-flat-button class="btn-primary full" type="submit" [disabled]="form.invalid">
           Guardar
         </button>
+
+        @if (id() && loaded()?.recorrente) {
+          <div class="rec-actions">
+            <button mat-stroked-button type="button" (click)="pararRecorrencia()">Parar recorrência</button>
+            <button mat-stroked-button type="button" class="danger" (click)="anularTemplate()">Anular</button>
+          </div>
+        }
       </form>
+
+      @if (id() && loaded()?.modoPagamento === 'PARTILHADO' && loaded()?.estado !== 'ANULADA') {
+        <section class="surface pay-panel">
+          <h3>Pagamentos</h3>
+          <p class="help">
+            {{ loaded()!.participantesQuitados || 0 }}/{{ loaded()!.participantes.length }} quotas
+            · em dívida {{ (loaded()!.totalEmDivida || 0) | currency: 'EUR' }}
+          </p>
+
+          <ul class="pay-list">
+            @for (p of loaded()!.participantes; track p.habitanteId) {
+              <li>
+                <span>{{ nomeHab(p.habitanteId) }}</span>
+                <span class="pay-meta">
+                  {{ (p.valorPago || 0) | currency: 'EUR' }} /
+                  {{ p.valor | currency: 'EUR' }}
+                  @if ((p.emDivida || 0) > 0.02) {
+                    <em>falta {{ p.emDivida | currency: 'EUR' }}</em>
+                  } @else {
+                    <em class="ok">quitado</em>
+                  }
+                </span>
+              </li>
+            }
+          </ul>
+
+          @if (minhaParte(); as parte) {
+            @if ((parte.emDivida || 0) > 0.02) {
+              <div class="pay-form">
+                <label class="ct-field">
+                  <span class="ct-label">Registar o meu pagamento</span>
+                  <div class="ct-control">
+                    <mat-icon>payments</mat-icon>
+                    <input
+                      type="number"
+                      inputmode="decimal"
+                      [value]="pagamentoValor"
+                      (input)="pagamentoValor = +$any($event.target).value"
+                      [attr.max]="parte.emDivida"
+                      step="0.01"
+                    />
+                  </div>
+                </label>
+                <div class="pay-btns">
+                  <button mat-stroked-button type="button" (click)="registarPagamento()">Registar</button>
+                  <button mat-flat-button class="btn-primary" type="button" (click)="pagarTudo()">
+                    Pagar a minha parte
+                  </button>
+                </div>
+              </div>
+            } @else {
+              <p class="help ok-line">A tua quota está paga.</p>
+            }
+          }
+        </section>
+      }
     </div>
   `,
   styles: [
@@ -157,15 +242,34 @@ import { Categoria, Habitante } from '../../models/models';
         text-decoration: none;
         margin-bottom: 8px;
       }
+      .origin-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0 0 12px;
+        font-size: 13px;
+        color: var(--ink-soft);
+        text-decoration: none;
+      }
       h2 {
         margin: 0 0 14px;
         font-size: 28px;
         font-weight: 800;
       }
+      h3 {
+        margin: 0 0 8px;
+        font-size: 18px;
+      }
       .form {
         display: flex;
         flex-direction: column;
         gap: 14px;
+      }
+      .help {
+        margin: -6px 0 0;
+        font-size: 13px;
+        color: var(--ink-soft);
+        line-height: 1.4;
       }
       .full {
         width: 100%;
@@ -184,6 +288,54 @@ import { Categoria, Habitante } from '../../models/models';
       .preview {
         font-weight: 600;
       }
+      .rec-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .rec-actions .danger {
+        color: #b42318;
+      }
+      .pay-panel {
+        margin-top: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .pay-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .pay-list li {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 14px;
+      }
+      .pay-meta {
+        text-align: right;
+        color: var(--ink-soft);
+        font-size: 13px;
+      }
+      .pay-meta em {
+        display: block;
+        font-style: normal;
+        font-weight: 600;
+        color: var(--ink);
+      }
+      .pay-meta em.ok,
+      .ok-line {
+        color: #1b7a4a;
+      }
+      .pay-btns {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
     `,
   ],
 })
@@ -194,23 +346,35 @@ export class DespesaFormComponent implements OnInit {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private toast = inject(ToastService);
+  private dialogs = inject(DialogService);
 
   categorias = signal<Categoria[]>([]);
   habitantes = signal<Habitante[]>([]);
   id = signal<string | null>(null);
+  loaded = signal<Despesa | null>(null);
+  despesaOrigemId = signal<string | null>(null);
+  pagamentoValor = 0;
 
   form = this.fb.nonNullable.group({
     descricao: ['', Validators.required],
     valor: [0, [Validators.required, Validators.min(0.01)]],
     categoriaId: ['', Validators.required],
     data: [new Date().toISOString().slice(0, 10), Validators.required],
-    pagoPor: ['', Validators.required],
+    modoPagamento: ['ADIANTADO' as 'ADIANTADO' | 'PARTILHADO'],
+    pagoPor: [''],
     estado: ['PAGA' as 'PAGA' | 'PENDENTE'],
     tipoDivisao: ['IGUAL' as 'IGUAL' | 'PERCENTAGEM' | 'VALOR'],
     participantes: this.fb.array([]),
     recorrente: [false],
     periodicidade: ['MENSAL'],
     observacoes: [''],
+  });
+
+  minhaParte = computed(() => {
+    const d = this.loaded();
+    const me = this.auth.user()?.habitanteId;
+    if (!d || !me) return null;
+    return d.participantes.find((p) => p.habitanteId === me) ?? null;
   });
 
   get participantes() {
@@ -228,8 +392,26 @@ export class DespesaFormComponent implements OnInit {
       this.rebuildParts();
       const me = this.auth.user()?.habitanteId;
       if (me) this.form.patchValue({ pagoPor: me });
+      this.onModoChange();
       if (this.id()) this.load(this.id()!);
     });
+  }
+
+  onModoChange() {
+    const modo = this.form.value.modoPagamento;
+    const pagoPor = this.form.get('pagoPor');
+    if (modo === 'PARTILHADO') {
+      pagoPor?.clearValidators();
+      pagoPor?.setValue('');
+      this.form.patchValue({ estado: 'PENDENTE' });
+    } else {
+      pagoPor?.setValidators([Validators.required]);
+      if (!pagoPor?.value) {
+        const me = this.auth.user()?.habitanteId;
+        if (me) pagoPor?.setValue(me);
+      }
+    }
+    pagoPor?.updateValueAndValidity();
   }
 
   rebuildParts() {
@@ -259,18 +441,22 @@ export class DespesaFormComponent implements OnInit {
 
   load(id: string) {
     this.api.getDespesa(id).subscribe((d) => {
+      this.loaded.set(d);
+      this.despesaOrigemId.set(d.despesaOrigemId || null);
       this.form.patchValue({
         descricao: d.descricao,
         valor: d.valor,
         categoriaId: d.categoriaId,
         data: new Date(d.data).toISOString().slice(0, 10),
-        pagoPor: d.pagoPor,
+        modoPagamento: d.modoPagamento || 'ADIANTADO',
+        pagoPor: d.pagoPor || '',
         estado: d.estado === 'ANULADA' ? 'PENDENTE' : d.estado,
         tipoDivisao: d.tipoDivisao,
         recorrente: d.recorrente,
         periodicidade: d.periodicidade || 'MENSAL',
         observacoes: d.observacoes,
       });
+      this.onModoChange();
       this.participantes.clear();
       d.participantes.forEach((p) => {
         this.participantes.push(
@@ -281,25 +467,117 @@ export class DespesaFormComponent implements OnInit {
           })
         );
       });
+      const me = this.minhaParte();
+      this.pagamentoValor = me?.emDivida ? Math.round(me.emDivida * 100) / 100 : 0;
     });
   }
 
   save() {
     if (this.form.invalid) return;
     const raw = this.form.getRawValue();
-    const body = {
-      ...raw,
+    const body: Record<string, unknown> = {
+      descricao: raw.descricao,
+      valor: raw.valor,
+      categoriaId: raw.categoriaId,
+      data: raw.data,
+      modoPagamento: raw.modoPagamento,
+      tipoDivisao: raw.tipoDivisao,
       participantes: raw.participantes,
+      recorrente: raw.recorrente,
+      periodicidade: raw.recorrente ? raw.periodicidade : undefined,
+      observacoes: raw.observacoes,
     };
+    if (raw.modoPagamento === 'ADIANTADO') {
+      body['pagoPor'] = raw.pagoPor;
+      body['estado'] = raw.estado;
+    }
     const req = this.id()
       ? this.api.updateDespesa(this.id()!, body)
       : this.api.createDespesa(body);
     req.subscribe({
-      next: () => {
+      next: (d) => {
         this.toast.success('Despesa guardada');
-        this.router.navigateByUrl('/despesas');
+        if (this.id()) {
+          this.loaded.set(d);
+          this.form.patchValue({ recorrente: d.recorrente });
+        } else {
+          this.router.navigateByUrl('/despesas');
+        }
       },
       error: (e) => this.toast.error(e?.error?.message || 'Erro ao guardar'),
     });
+  }
+
+  registarPagamento() {
+    const id = this.id();
+    const parte = this.minhaParte();
+    if (!id || !parte) return;
+    const valor = Math.round(this.pagamentoValor * 100) / 100;
+    if (valor <= 0 || valor > (parte.emDivida || 0) + 0.02) {
+      this.toast.error('Valor inválido');
+      return;
+    }
+    this.api.registarPagamento(id, { valor }).subscribe({
+      next: (d) => {
+        this.loaded.set(d);
+        const me = d.participantes.find((p: Participante) => p.habitanteId === this.auth.user()?.habitanteId);
+        this.pagamentoValor = me?.emDivida ? Math.round(me.emDivida * 100) / 100 : 0;
+        this.toast.success('Pagamento registado');
+      },
+      error: (e) => this.toast.error(e?.error?.message || 'Erro ao registar'),
+    });
+  }
+
+  pagarTudo() {
+    const parte = this.minhaParte();
+    if (!parte?.emDivida) return;
+    this.pagamentoValor = Math.round(parte.emDivida * 100) / 100;
+    this.registarPagamento();
+  }
+
+  pararRecorrencia() {
+    const id = this.id();
+    if (!id) return;
+    this.dialogs
+      .confirm({
+        title: 'Parar recorrência?',
+        message: 'As cópias já geradas ficam; não serão criadas novas automaticamente.',
+        confirmLabel: 'Parar',
+        icon: 'event_busy',
+      })
+      .pipe(filter(Boolean))
+      .subscribe(() => {
+        this.api.pararRecorrencia(id).subscribe({
+          next: (d) => {
+            this.loaded.set(d);
+            this.form.patchValue({ recorrente: false });
+            this.toast.success('Recorrência parada');
+          },
+          error: (e) => this.toast.error(e?.error?.message || 'Erro'),
+        });
+      });
+  }
+
+  anularTemplate() {
+    const id = this.id();
+    if (!id) return;
+    this.dialogs
+      .confirm({
+        title: 'Anular esta despesa?',
+        message: 'Fica anulada e a recorrência para. O histórico de auditoria mantém-se.',
+        confirmLabel: 'Anular',
+        tone: 'danger',
+        icon: 'delete_outline',
+      })
+      .pipe(filter(Boolean))
+      .subscribe(() => {
+        this.api.deleteDespesa(id).subscribe({
+          next: () => {
+            this.toast.success('Despesa anulada');
+            this.router.navigateByUrl('/despesas');
+          },
+          error: (e) => this.toast.error(e?.error?.message || 'Erro'),
+        });
+      });
   }
 }

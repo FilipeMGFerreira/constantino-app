@@ -56,8 +56,8 @@ import { MonthNavComponent } from '../../shared/ui/month-nav.component';
             <div class="value pos">{{ devemMe() | currency: 'EUR' }}</div>
           </div>
           <div class="stat">
-            <div class="label"><mat-icon>receipt</mat-icon> Despesas</div>
-            <div class="value">{{ data()?.numeroDespesas || 0 }}</div>
+            <div class="label"><mat-icon>pending_actions</mat-icon> Por pagar</div>
+            <div class="value">{{ porPagar() | currency: 'EUR' }}</div>
           </div>
         </div>
       }
@@ -84,6 +84,9 @@ import { MonthNavComponent } from '../../shared/ui/month-nav.component';
                 <span class="chip" [class.paga]="d.estado === 'PAGA'" [class.pendente]="d.estado === 'PENDENTE'">{{
                   d.estado === 'PAGA' ? 'Paga' : 'Pendente'
                 }}</span>
+                @if (d.modoPagamento === 'PARTILHADO') {
+                  <span class="chip mode">Partilhada</span>
+                }
               </div>
             </div>
             <strong class="amount-sm">{{ d.valor | currency: 'EUR' }}</strong>
@@ -150,11 +153,16 @@ import { MonthNavComponent } from '../../shared/ui/month-nav.component';
       }
       .row-sub {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: 8px;
         font-size: 12px;
         color: var(--ink-soft);
         margin-top: 4px;
+      }
+      .chip.mode {
+        background: var(--sand-deep);
+        color: var(--ink-soft);
       }
       .amount-sm {
         font-family: var(--font-display);
@@ -215,6 +223,7 @@ export class DashboardComponent {
   meuSaldo = computed(() => this.data()?.meuSaldo?.saldo ?? 0);
   devemMe = computed(() => this.data()?.meuSaldo?.devemMe ?? 0);
   devo = computed(() => this.data()?.meuSaldo?.devo ?? 0);
+  porPagar = computed(() => Number(this.data()?.porPagar ?? 0));
 
   constructor() {
     effect(() => {

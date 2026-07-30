@@ -3,11 +3,14 @@ import { Schema, model, Types, Document } from 'mongoose';
 export type TipoDivisao = 'IGUAL' | 'PERCENTAGEM' | 'VALOR';
 export type EstadoDespesa = 'PAGA' | 'PENDENTE' | 'ANULADA';
 export type Periodicidade = 'MENSAL' | 'TRIMESTRAL' | 'SEMESTRAL' | 'ANUAL';
+export type ModoPagamento = 'ADIANTADO' | 'PARTILHADO';
 
 export interface IParticipante {
   habitanteId: Types.ObjectId;
   percentagem: number;
   valor: number;
+  valorPago: number;
+  pagoEm?: Date | null;
 }
 
 export interface IDespesa extends Document {
@@ -18,9 +21,10 @@ export interface IDespesa extends Document {
   data: Date;
   mes: number;
   ano: number;
-  pagoPor: Types.ObjectId;
+  pagoPor?: Types.ObjectId;
   participantes: IParticipante[];
   tipoDivisao: TipoDivisao;
+  modoPagamento: ModoPagamento;
   recorrente: boolean;
   periodicidade?: Periodicidade;
   proximaGeracao?: Date;
@@ -39,6 +43,8 @@ const participanteSchema = new Schema<IParticipante>(
     habitanteId: { type: Schema.Types.ObjectId, ref: 'Habitante', required: true },
     percentagem: { type: Number, required: true },
     valor: { type: Number, required: true },
+    valorPago: { type: Number, default: 0, min: 0 },
+    pagoEm: { type: Date, default: null },
   },
   { _id: false }
 );
@@ -52,12 +58,17 @@ const despesaSchema = new Schema<IDespesa>(
     data: { type: Date, required: true },
     mes: { type: Number, required: true, min: 1, max: 12 },
     ano: { type: Number, required: true },
-    pagoPor: { type: Schema.Types.ObjectId, ref: 'Habitante', required: true },
+    pagoPor: { type: Schema.Types.ObjectId, ref: 'Habitante' },
     participantes: { type: [participanteSchema], required: true },
     tipoDivisao: {
       type: String,
       enum: ['IGUAL', 'PERCENTAGEM', 'VALOR'],
       default: 'IGUAL',
+    },
+    modoPagamento: {
+      type: String,
+      enum: ['ADIANTADO', 'PARTILHADO'],
+      default: 'ADIANTADO',
     },
     recorrente: { type: Boolean, default: false },
     periodicidade: {

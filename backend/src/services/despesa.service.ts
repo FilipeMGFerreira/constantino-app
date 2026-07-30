@@ -1,13 +1,34 @@
 import { Types } from 'mongoose';
 import mongoose from 'mongoose';
-import { Despesa, IDespesa, Periodicidade } from '../models/despesa.model';
+import { Despesa, IDespesa, Periodicidade, ModoPagamento } from '../models/despesa.model';
 import { Categoria } from '../models/categoria.model';
-import { NotFoundError } from '../utils/errors';
+import { NotFoundError, ValidationError } from '../utils/errors';
 import { calcularDivisao, SplitInput } from './despesa-split.service';
 import { writeAudit } from './audit.service';
 import { notifyUsers } from './notificacao.service';
+import { roundMoney } from '../utils/helpers';
+import { emDivida, estadoPartilhado, EPS } from '../utils/pagamento-partilhado';
+
+function habitanteIdsOf(d: IDespesa): string[] {
+  const ids = d.participantes.map((p) => p.habitanteId.toString());
+  if (d.pagoPor) ids.push(d.pagoPor.toString());
+  return [...new Set(ids)];
+}
 
 function serialize(d: IDespesa, cat?: { nome?: string; icone?: string; cor?: string } | null) {
+  const modo = d.modoPagamento || 'ADIANTADO';
+  const participantes = d.participantes.map((p) => {
+    const valorPago = p.valorPago ?? 0;
+    return {
+      habitanteId: p.habitanteId.toString(),
+      percentagem: p.percentagem,
+      valor: p.valor,
+      valorPago,
+      emDivida: emDivida(p.valor, valorPago),
+      pagoEm: p.pagoEm ?? null,
+    };
+  });
+
   return {
     id: d._id.toString(),
     casaId: d.casaId.toString(),
@@ -20,17 +41,14 @@ function serialize(d: IDespesa, cat?: { nome?: string; icone?: string; cor?: str
     data: d.data,
     mes: d.mes,
     ano: d.ano,
-    pagoPor: d.pagoPor.toString(),
-    participantes: d.participantes.map((p) => ({
-      habitanteId: p.habitanteId.toString(),
-      percentagem: p.percentagem,
-      valor: p.valor,
-    })),
+    pagoPor: d.pagoPor?.toString() ?? null,
+    participantes,
     tipoDivisao: d.tipoDivisao,
+    modoPagamento: modo,
     recorrente: d.recorrente,
     periodicidade: d.periodicidade,
     proximaGeracao: d.proximaGeracao,
-    despesaOrigemId: d.despesaOrigemId?.toString(),
+    despesaOrigemId: d.despesaOrigemId?.toString() ?? null,
     estado: d.estado,
     observacoes: d.observacoes,
     anexoFileId: d.anexoFileId?.toString() ?? null,
@@ -38,6 +56,8 @@ function serialize(d: IDespesa, cat?: { nome?: string; icone?: string; cor?: str
     updatedBy: d.updatedBy?.toString(),
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
+    totalEmDivida: roundMoney(participantes.reduce((s, p) => s + p.emDivida, 0)),
+    participantesQuitados: participantes.filter((p) => p.emDivida <= EPS).length,
   };
 }
 
@@ -64,14 +84,34 @@ function nextGenerationDate(from: Date, periodicidade: Periodicidade): Date {
   return d;
 }
 
+function withPagamentosReset(
+  parts: ReturnType<typeof calcularDivisao>,
+  previous?: IDespesa['participantes']
+) {
+  const prevMap = new Map(
+    (previous || []).map((p) => [p.habitanteId.toString(), p])
+  );
+  return parts.map((p) => {
+    const prev = prevMap.get(p.habitanteId.toString());
+    // Preserve payments when same habitante keeps a share (edit); clamp to new valor
+    const valorPago = prev ? Math.min(prev.valorPago || 0, p.valor) : 0;
+    return {
+      ...p,
+      valorPago,
+      pagoEm: valorPago > 0 ? prev?.pagoEm ?? null : null,
+    };
+  });
+}
+
 export interface DespesaInput {
   descricao: string;
   categoriaId: string;
   valor: number;
   data: string | Date;
-  pagoPor: string;
+  pagoPor?: string;
   participantes: SplitInput[];
   tipoDivisao: 'IGUAL' | 'PERCENTAGEM' | 'VALOR';
+  modoPagamento?: ModoPagamento;
   recorrente?: boolean;
   periodicidade?: Periodicidade;
   estado?: 'PAGA' | 'PENDENTE' | 'ANULADA';
@@ -145,8 +185,20 @@ export async function getDespesa(casaId: string, id: string) {
 }
 
 export async function createDespesa(casaId: string, userId: string, data: DespesaInput) {
+  const modo = data.modoPagamento || 'ADIANTADO';
+  if (modo === 'ADIANTADO' && !data.pagoPor) {
+    throw new ValidationError('pagoPor é obrigatório no modo ADIANTADO');
+  }
+
   const dataObj = parseDate(data.data);
-  const participantes = calcularDivisao(data.valor, data.tipoDivisao, data.participantes);
+  const participantes = withPagamentosReset(
+    calcularDivisao(data.valor, data.tipoDivisao, data.participantes)
+  );
+
+  let estado = data.estado ?? (modo === 'PARTILHADO' ? 'PENDENTE' : 'PAGA');
+  if (modo === 'PARTILHADO') {
+    estado = estadoPartilhado(participantes);
+  }
 
   const doc = await Despesa.create({
     casaId,
@@ -156,16 +208,17 @@ export async function createDespesa(casaId: string, userId: string, data: Despes
     data: dataObj,
     mes: dataObj.getMonth() + 1,
     ano: dataObj.getFullYear(),
-    pagoPor: data.pagoPor,
+    pagoPor: modo === 'ADIANTADO' && data.pagoPor ? data.pagoPor : undefined,
     participantes,
     tipoDivisao: data.tipoDivisao,
+    modoPagamento: modo,
     recorrente: data.recorrente ?? false,
     periodicidade: data.periodicidade,
     proximaGeracao:
       data.recorrente && data.periodicidade
         ? nextGenerationDate(dataObj, data.periodicidade)
         : undefined,
-    estado: data.estado ?? 'PAGA',
+    estado,
     observacoes: data.observacoes ?? '',
     createdBy: userId,
   });
@@ -179,16 +232,9 @@ export async function createDespesa(casaId: string, userId: string, data: Despes
     depois: serialize(doc),
   });
 
-  const habitanteIds = [
-    ...new Set([
-      doc.pagoPor.toString(),
-      ...doc.participantes.map((p) => p.habitanteId.toString()),
-    ]),
-  ];
-
   await notifyUsers({
     casaId,
-    habitanteIds,
+    habitanteIds: habitanteIdsOf(doc),
     excludeUserId: userId,
     tipo: 'DESPESA_NOVA',
     titulo: 'Nova despesa',
@@ -219,33 +265,50 @@ export async function updateDespesa(
     doc.mes = dataObj.getMonth() + 1;
     doc.ano = dataObj.getFullYear();
   }
-  if (data.pagoPor !== undefined) doc.pagoPor = new Types.ObjectId(data.pagoPor);
+  if (data.modoPagamento !== undefined) doc.modoPagamento = data.modoPagamento;
+  const modo = doc.modoPagamento || 'ADIANTADO';
+
+  if (data.pagoPor !== undefined) {
+    doc.pagoPor = data.pagoPor ? new Types.ObjectId(data.pagoPor) : undefined;
+  }
+  if (modo === 'PARTILHADO') {
+    doc.pagoPor = undefined;
+  } else if (!doc.pagoPor) {
+    throw new ValidationError('pagoPor é obrigatório no modo ADIANTADO');
+  }
+
   if (data.tipoDivisao !== undefined) doc.tipoDivisao = data.tipoDivisao;
-  if (data.participantes !== undefined && data.valor !== undefined) {
-    doc.participantes = calcularDivisao(
-      data.valor ?? doc.valor,
-      data.tipoDivisao ?? doc.tipoDivisao,
-      data.participantes
-    );
-  } else if (data.participantes !== undefined) {
-    doc.participantes = calcularDivisao(doc.valor, data.tipoDivisao ?? doc.tipoDivisao, data.participantes);
-  } else if (data.valor !== undefined) {
-    doc.participantes = calcularDivisao(
-      data.valor,
-      doc.tipoDivisao,
+  if (data.participantes !== undefined || data.valor !== undefined || data.tipoDivisao !== undefined) {
+    const partsInput =
+      data.participantes ??
       doc.participantes.map((p) => ({
         habitanteId: p.habitanteId.toString(),
         percentagem: p.percentagem,
         valor: p.valor,
-      }))
+      }));
+    doc.participantes = withPagamentosReset(
+      calcularDivisao(data.valor ?? doc.valor, data.tipoDivisao ?? doc.tipoDivisao, partsInput),
+      doc.participantes
     );
   }
-  if (data.recorrente !== undefined) doc.recorrente = data.recorrente;
-  if (data.periodicidade !== undefined) doc.periodicidade = data.periodicidade;
-  if (data.estado !== undefined) doc.estado = data.estado;
-  if (data.observacoes !== undefined) doc.observacoes = data.observacoes;
-  doc.updatedBy = new Types.ObjectId(userId);
 
+  if (data.recorrente !== undefined) {
+    doc.recorrente = data.recorrente;
+    if (!data.recorrente) doc.proximaGeracao = undefined;
+  }
+  if (data.periodicidade !== undefined) doc.periodicidade = data.periodicidade;
+  if (data.recorrente && data.periodicidade && !doc.proximaGeracao) {
+    doc.proximaGeracao = nextGenerationDate(doc.data, data.periodicidade);
+  }
+  if (data.observacoes !== undefined) doc.observacoes = data.observacoes;
+
+  if (modo === 'PARTILHADO') {
+    doc.estado = estadoPartilhado(doc.participantes);
+  } else if (data.estado !== undefined) {
+    doc.estado = data.estado;
+  }
+
+  doc.updatedBy = new Types.ObjectId(userId);
   await doc.save();
 
   await writeAudit({
@@ -258,13 +321,7 @@ export async function updateDespesa(
     depois: serialize(doc),
   });
 
-  const habitanteIds = [
-    ...new Set([
-      doc.pagoPor.toString(),
-      ...doc.participantes.map((p) => p.habitanteId.toString()),
-    ]),
-  ];
-
+  const habitanteIds = habitanteIdsOf(doc);
   if (data.estado && data.estado !== estadoAnterior) {
     await notifyUsers({
       casaId,
@@ -290,11 +347,91 @@ export async function updateDespesa(
   return serialize(doc);
 }
 
+export async function registarPagamento(
+  casaId: string,
+  userId: string,
+  despesaId: string,
+  data: { valor: number; habitanteId?: string },
+  habitanteDoUser?: string
+) {
+  const doc = await Despesa.findOne({ _id: despesaId, casaId });
+  if (!doc) throw new NotFoundError('Despesa não encontrada');
+  if ((doc.modoPagamento || 'ADIANTADO') !== 'PARTILHADO') {
+    throw new ValidationError('Só despesas partilhadas aceitam pagamentos por habitante');
+  }
+  if (doc.estado === 'ANULADA') {
+    throw new ValidationError('Despesa anulada');
+  }
+
+  const targetId = data.habitanteId || habitanteDoUser;
+  if (!targetId) throw new ValidationError('habitanteId em falta');
+
+  const part = doc.participantes.find((p) => p.habitanteId.toString() === targetId);
+  if (!part) throw new ValidationError('Habitante não participa nesta despesa');
+
+  const restante = emDivida(part.valor, part.valorPago || 0);
+  const valor = roundMoney(data.valor);
+  if (valor <= 0 || valor > restante + EPS) {
+    throw new ValidationError(`Valor inválido (máx. ${restante.toFixed(2)} €)`);
+  }
+
+  const antes = serialize(doc);
+  part.valorPago = roundMoney((part.valorPago || 0) + Math.min(valor, restante));
+  part.pagoEm = new Date();
+  doc.estado = estadoPartilhado(doc.participantes);
+  doc.updatedBy = new Types.ObjectId(userId);
+  await doc.save();
+
+  await writeAudit({
+    casaId,
+    userId,
+    acao: 'UPDATE',
+    entidade: 'Despesa',
+    entidadeId: despesaId,
+    antes,
+    depois: serialize(doc),
+  });
+
+  await notifyUsers({
+    casaId,
+    habitanteIds: habitanteIdsOf(doc),
+    excludeUserId: userId,
+    tipo: 'DESPESA_ESTADO',
+    titulo: 'Pagamento registado',
+    mensagem: `${doc.descricao} · +${valor.toFixed(2)} €`,
+    despesaId: doc._id,
+  });
+
+  return serialize(doc);
+}
+
+export async function pararRecorrencia(casaId: string, userId: string, id: string) {
+  const doc = await Despesa.findOne({ _id: id, casaId });
+  if (!doc) throw new NotFoundError('Despesa não encontrada');
+  const antes = serialize(doc);
+  doc.recorrente = false;
+  doc.proximaGeracao = undefined;
+  doc.updatedBy = new Types.ObjectId(userId);
+  await doc.save();
+  await writeAudit({
+    casaId,
+    userId,
+    acao: 'UPDATE',
+    entidade: 'Despesa',
+    entidadeId: id,
+    antes,
+    depois: serialize(doc),
+  });
+  return serialize(doc);
+}
+
 export async function deleteDespesa(casaId: string, userId: string, id: string) {
   const doc = await Despesa.findOne({ _id: id, casaId });
   if (!doc) throw new NotFoundError('Despesa não encontrada');
   const antes = serialize(doc);
   doc.estado = 'ANULADA';
+  doc.recorrente = false;
+  doc.proximaGeracao = undefined;
   doc.updatedBy = new Types.ObjectId(userId);
   await doc.save();
 
@@ -308,16 +445,9 @@ export async function deleteDespesa(casaId: string, userId: string, id: string) 
     depois: serialize(doc),
   });
 
-  const habitanteIds = [
-    ...new Set([
-      doc.pagoPor.toString(),
-      ...doc.participantes.map((p) => p.habitanteId.toString()),
-    ]),
-  ];
-
   await notifyUsers({
     casaId,
-    habitanteIds,
+    habitanteIds: habitanteIdsOf(doc),
     excludeUserId: userId,
     tipo: 'DESPESA_REMOVIDA',
     titulo: 'Despesa anulada',
@@ -331,20 +461,22 @@ export async function deleteDespesa(casaId: string, userId: string, id: string) 
 export async function duplicarDespesa(casaId: string, userId: string, id: string) {
   const original = await Despesa.findOne({ _id: id, casaId });
   if (!original) throw new NotFoundError('Despesa não encontrada');
+  const modo = original.modoPagamento || 'ADIANTADO';
 
   return createDespesa(casaId, userId, {
     descricao: `${original.descricao} (cópia)`,
     categoriaId: original.categoriaId.toString(),
     valor: original.valor,
     data: new Date(),
-    pagoPor: original.pagoPor.toString(),
+    pagoPor: original.pagoPor?.toString(),
     participantes: original.participantes.map((p) => ({
       habitanteId: p.habitanteId.toString(),
       percentagem: p.percentagem,
       valor: p.valor,
     })),
     tipoDivisao: original.tipoDivisao,
-    estado: 'PENDENTE',
+    modoPagamento: modo,
+    estado: modo === 'PARTILHADO' ? 'PENDENTE' : 'PENDENTE',
     observacoes: original.observacoes,
   });
 }
@@ -384,6 +516,15 @@ export async function gerarRecorrentes() {
     }
 
     const dataNova = origem.proximaGeracao ?? hoje;
+    const modo = origem.modoPagamento || 'ADIANTADO';
+    const participantes = origem.participantes.map((p) => ({
+      habitanteId: p.habitanteId,
+      percentagem: p.percentagem,
+      valor: p.valor,
+      valorPago: 0,
+      pagoEm: null,
+    }));
+
     await Despesa.create({
       casaId: origem.casaId,
       descricao: origem.descricao,
@@ -392,12 +533,13 @@ export async function gerarRecorrentes() {
       data: dataNova,
       mes: dataNova.getMonth() + 1,
       ano: dataNova.getFullYear(),
-      pagoPor: origem.pagoPor,
-      participantes: origem.participantes,
+      pagoPor: modo === 'ADIANTADO' ? origem.pagoPor : undefined,
+      participantes,
       tipoDivisao: origem.tipoDivisao,
+      modoPagamento: modo,
       recorrente: false,
       despesaOrigemId: origem._id,
-      estado: 'PENDENTE',
+      estado: modo === 'PARTILHADO' ? 'PENDENTE' : 'PENDENTE',
       observacoes: origem.observacoes,
       createdBy: origem.createdBy,
     });

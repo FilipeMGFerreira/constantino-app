@@ -43,6 +43,9 @@ export interface Participante {
   habitanteId: string;
   percentagem: number;
   valor: number;
+  valorPago?: number;
+  emDivida?: number;
+  pagoEm?: string | null;
 }
 
 export interface Despesa {
@@ -56,14 +59,19 @@ export interface Despesa {
   data: string;
   mes: number;
   ano: number;
-  pagoPor: string;
+  pagoPor: string | null;
   participantes: Participante[];
   tipoDivisao: 'IGUAL' | 'PERCENTAGEM' | 'VALOR';
+  modoPagamento?: 'ADIANTADO' | 'PARTILHADO';
   recorrente: boolean;
   periodicidade?: string;
+  proximaGeracao?: string | null;
+  despesaOrigemId?: string | null;
   estado: 'PAGA' | 'PENDENTE' | 'ANULADA';
   observacoes: string;
   anexoFileId: string | null;
+  totalEmDivida?: number;
+  participantesQuitados?: number;
 }
 
 export interface ApiResponse<T> {

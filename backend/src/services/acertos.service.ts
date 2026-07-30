@@ -1,11 +1,28 @@
 import { Despesa } from '../models/despesa.model';
 import { Habitante } from '../models/habitante.model';
 import { AcertoLiquidacao } from '../models/acerto.model';
-import { NotFoundError } from '../utils/errors';
-import { minimizarTransferencias } from './despesa-split.service';
+import { minimizarTransferencias, aplicarLiquidacoes } from './despesa-split.service';
 import { buildSaldos } from './dashboard.service';
 import { writeAudit } from './audit.service';
 import { roundMoney } from '../utils/helpers';
+
+async function loadLiquidacoes(casaId: string, mes: number, ano: number) {
+  const liquidacoes = await AcertoLiquidacao.find({
+    casaId,
+    mes,
+    ano,
+    liquidado: true,
+  }).lean();
+
+  return liquidacoes.map((l) => ({
+    id: l._id.toString(),
+    deHabitanteId: l.deHabitanteId.toString(),
+    paraHabitanteId: l.paraHabitanteId.toString(),
+    valor: l.valor,
+    liquidadoEm: l.liquidadoEm,
+    nota: l.nota,
+  }));
+}
 
 export async function getAcertos(casaId: string, mes?: number, ano?: number) {
   const now = new Date();
@@ -17,19 +34,15 @@ export async function getAcertos(casaId: string, mes?: number, ano?: number) {
     mes: m,
     ano: a,
     estado: 'PAGA',
+    $or: [{ modoPagamento: 'ADIANTADO' }, { modoPagamento: { $exists: false } }],
   }).lean();
 
-  const saldos = buildSaldos(despesas);
+  const liquidacoes = await loadLiquidacoes(casaId, m, a);
+  const saldosBrutos = buildSaldos(despesas.filter((d) => !!d.pagoPor));
+  const saldos = aplicarLiquidacoes(saldosBrutos, liquidacoes);
   const transferencias = minimizarTransferencias(saldos);
   const habitantes = await Habitante.find({ casaId }).lean();
   const habMap = new Map(habitantes.map((h) => [h._id.toString(), h]));
-
-  const liquidacoes = await AcertoLiquidacao.find({
-    casaId,
-    mes: m,
-    ano: a,
-    liquidado: true,
-  }).lean();
 
   return {
     mes: m,
@@ -45,21 +58,14 @@ export async function getAcertos(casaId: string, mes?: number, ano?: number) {
       para: t.para,
       paraNome: habMap.get(t.para)?.nome,
       valor: t.valor,
-      liquidado: liquidacoes.some(
-        (l) =>
-          l.deHabitanteId.toString() === t.de &&
-          l.paraHabitanteId.toString() === t.para &&
-          Math.abs(l.valor - t.valor) < 0.02
-      ),
+      liquidado: false,
       texto: `${habMap.get(t.de)?.nome ?? 'Alguém'} paga ${t.valor.toFixed(2)} € a ${habMap.get(t.para)?.nome ?? 'alguém'}`,
     })),
     liquidacoes: liquidacoes.map((l) => ({
-      id: l._id.toString(),
-      deHabitanteId: l.deHabitanteId.toString(),
-      paraHabitanteId: l.paraHabitanteId.toString(),
-      valor: l.valor,
-      liquidadoEm: l.liquidadoEm,
-      nota: l.nota,
+      ...l,
+      deNome: habMap.get(l.deHabitanteId)?.nome,
+      paraNome: habMap.get(l.paraHabitanteId)?.nome,
+      texto: `${habMap.get(l.deHabitanteId)?.nome ?? 'Alguém'} pagou ${l.valor.toFixed(2)} € a ${habMap.get(l.paraHabitanteId)?.nome ?? 'alguém'}`,
     })),
   };
 }
@@ -120,7 +126,10 @@ export async function getEstatisticas(casaId: string, ano?: number) {
 
   for (const d of despesas) {
     byCat.set(d.categoriaId.toString(), (byCat.get(d.categoriaId.toString()) ?? 0) + d.valor);
-    byHab.set(d.pagoPor.toString(), (byHab.get(d.pagoPor.toString()) ?? 0) + d.valor);
+    if (d.pagoPor) {
+      const id = d.pagoPor.toString();
+      byHab.set(id, (byHab.get(id) ?? 0) + d.valor);
+    }
     byMes[d.mes - 1] += d.valor;
   }
 
