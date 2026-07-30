@@ -25,10 +25,10 @@ services:
       - key: ENABLE_CRON
         value: 'true'
 
+  # Static sites have no instance plan — omit `plan`
   - type: web
     name: constantino-web
     runtime: static
-    plan: free
     rootDir: frontend
     buildCommand: npm ci && npm run build
     staticPublishPath: dist/frontend/browser
