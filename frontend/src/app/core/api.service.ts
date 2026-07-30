@@ -97,8 +97,8 @@ export class ApiService {
 
   getDashboard(mes?: number, ano?: number) {
     let params = new HttpParams();
-    if (mes) params = params.set('mes', mes);
-    if (ano) params = params.set('ano', ano);
+    if (mes != null) params = params.set('mes', String(mes));
+    if (ano != null) params = params.set('ano', String(ano));
     return this.http
       .get<ApiResponse<Record<string, unknown>>>(`${this.base}/dashboard`, { params })
       .pipe(map((r) => r.data));

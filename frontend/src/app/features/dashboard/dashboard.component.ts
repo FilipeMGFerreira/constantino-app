@@ -70,13 +70,17 @@ import { MonthNavComponent } from '../../shared/ui/month-nav.component';
       <div class="surface list-panel">
         @for (d of ultimas(); track d.id) {
           <a class="list-row" [routerLink]="['/despesas', d.id]">
-            <div class="icon-tile">
-              <mat-icon>payments</mat-icon>
+            <div
+              class="icon-tile"
+              [style.background]="tint(d.categoriaCor)"
+              [style.color]="d.categoriaCor || 'var(--ink)'"
+            >
+              <mat-icon>{{ d.categoriaIcone || 'payments' }}</mat-icon>
             </div>
             <div class="grow">
               <div class="row-title">{{ d.descricao }}</div>
               <div class="row-sub">
-                {{ d.data | date: 'd MMM' }}
+                {{ d.categoriaNome || 'Sem categoria' }} · {{ d.data | date: 'd MMM' }}
                 <span class="chip" [class.paga]="d.estado === 'PAGA'" [class.pendente]="d.estado === 'PENDENTE'">{{
                   d.estado === 'PAGA' ? 'Paga' : 'Pendente'
                 }}</span>
@@ -224,5 +228,15 @@ export class DashboardComponent {
         error: () => this.loading.set(false),
       });
     });
+  }
+
+  tint(hex?: string) {
+    if (!hex) return 'var(--sand-deep)';
+    const c = hex.replace('#', '');
+    if (c.length !== 6) return 'var(--sand-deep)';
+    const r = parseInt(c.slice(0, 2), 16);
+    const g = parseInt(c.slice(2, 4), 16);
+    const b = parseInt(c.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, 0.16)`;
   }
 }

@@ -1,17 +1,21 @@
 import { Types } from 'mongoose';
 import mongoose from 'mongoose';
 import { Despesa, IDespesa, Periodicidade } from '../models/despesa.model';
+import { Categoria } from '../models/categoria.model';
 import { NotFoundError } from '../utils/errors';
 import { calcularDivisao, SplitInput } from './despesa-split.service';
 import { writeAudit } from './audit.service';
 import { notifyUsers } from './notificacao.service';
 
-function serialize(d: IDespesa) {
+function serialize(d: IDespesa, cat?: { nome?: string; icone?: string; cor?: string } | null) {
   return {
     id: d._id.toString(),
     casaId: d.casaId.toString(),
     descricao: d.descricao,
     categoriaId: d.categoriaId.toString(),
+    categoriaNome: cat?.nome ?? null,
+    categoriaIcone: cat?.icone ?? 'payments',
+    categoriaCor: cat?.cor ?? '#2B2B2B',
     valor: d.valor,
     data: d.data,
     mes: d.mes,
@@ -113,16 +117,19 @@ export async function listDespesas(
   const sortField = query.sort?.startsWith('-') ? query.sort.slice(1) : query.sort || 'data';
   const sortDir = query.sort?.startsWith('-') ? -1 : query.sort ? 1 : -1;
 
-  const [items, total] = await Promise.all([
+  const [items, total, categorias] = await Promise.all([
     Despesa.find(filter)
       .sort({ [sortField]: sortDir })
       .skip((page - 1) * limit)
       .limit(limit),
     Despesa.countDocuments(filter),
+    Categoria.find({ casaId }).lean(),
   ]);
 
+  const catMap = new Map(categorias.map((c) => [c._id.toString(), c]));
+
   return {
-    items: items.map(serialize),
+    items: items.map((d) => serialize(d, catMap.get(d.categoriaId.toString()))),
     total,
     page,
     limit,
@@ -133,7 +140,8 @@ export async function listDespesas(
 export async function getDespesa(casaId: string, id: string) {
   const d = await Despesa.findOne({ _id: id, casaId });
   if (!d) throw new NotFoundError('Despesa não encontrada');
-  return serialize(d);
+  const cat = await Categoria.findById(d.categoriaId).lean();
+  return serialize(d, cat);
 }
 
 export async function createDespesa(casaId: string, userId: string, data: DespesaInput) {

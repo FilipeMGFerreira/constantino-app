@@ -49,6 +49,9 @@ export interface Despesa {
   id: string;
   descricao: string;
   categoriaId: string;
+  categoriaNome?: string | null;
+  categoriaIcone?: string;
+  categoriaCor?: string;
   valor: number;
   data: string;
   mes: number;

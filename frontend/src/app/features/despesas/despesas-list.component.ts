@@ -53,11 +53,17 @@ import { Despesa } from '../../models/models';
         @for (d of items(); track d.id) {
           <div class="list-row row">
             <a [routerLink]="['/despesas', d.id]" class="main">
-              <div class="icon-tile"><mat-icon>payments</mat-icon></div>
+              <div
+                class="icon-tile"
+                [style.background]="tint(d.categoriaCor)"
+                [style.color]="d.categoriaCor || 'var(--ink)'"
+              >
+                <mat-icon>{{ d.categoriaIcone || 'payments' }}</mat-icon>
+              </div>
               <div class="grow">
                 <div class="t">{{ d.descricao }}</div>
                 <div class="s">
-                  {{ d.data | date: 'dd/MM/yyyy' }}
+                  {{ d.categoriaNome || 'Categoria' }} · {{ d.data | date: 'dd/MM/yyyy' }}
                   <span class="chip" [class.paga]="d.estado === 'PAGA'" [class.pendente]="d.estado === 'PENDENTE'">{{
                     d.estado === 'PAGA' ? 'Paga' : 'Pendente'
                   }}</span>
@@ -234,5 +240,15 @@ export class DespesasListComponent {
           this.reloadTick.update((n) => n + 1);
         });
       });
+  }
+
+  tint(hex?: string) {
+    if (!hex) return 'var(--sand-deep)';
+    const c = hex.replace('#', '');
+    if (c.length !== 6) return 'var(--sand-deep)';
+    const r = parseInt(c.slice(0, 2), 16);
+    const g = parseInt(c.slice(2, 4), 16);
+    const b = parseInt(c.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, 0.16)`;
   }
 }

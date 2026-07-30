@@ -80,10 +80,9 @@ export async function getDashboard(
     ? saldos.find((s) => s.habitanteId === habitanteId)
     : null;
 
-  const ultimas = await Despesa.find({ casaId, estado: { $ne: 'ANULADA' } })
-    .sort({ data: -1 })
-    .limit(8)
-    .lean();
+  const ultimas = [...despesasMes]
+    .sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())
+    .slice(0, 8);
 
   const atividade = await AuditLog.find({ casaId })
     .sort({ createdAt: -1 })
@@ -130,15 +129,21 @@ export async function getDashboard(
         }
       : null,
     saldoGeral: saldos,
-    ultimasDespesas: ultimas.map((d) => ({
-      id: d._id.toString(),
-      descricao: d.descricao,
-      valor: d.valor,
-      data: d.data,
-      estado: d.estado,
-      categoriaId: d.categoriaId.toString(),
-      pagoPor: d.pagoPor.toString(),
-    })),
+    ultimasDespesas: ultimas.map((d) => {
+      const cat = catMap.get(d.categoriaId.toString());
+      return {
+        id: d._id.toString(),
+        descricao: d.descricao,
+        valor: d.valor,
+        data: d.data,
+        estado: d.estado,
+        categoriaId: d.categoriaId.toString(),
+        categoriaNome: cat?.nome ?? null,
+        categoriaIcone: cat?.icone ?? 'payments',
+        categoriaCor: cat?.cor ?? '#2B2B2B',
+        pagoPor: d.pagoPor.toString(),
+      };
+    }),
     atividade: atividade.map((a) => ({
       id: a._id.toString(),
       acao: a.acao,
