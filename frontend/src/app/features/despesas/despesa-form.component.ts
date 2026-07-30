@@ -6,12 +6,12 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { CurrencyPipe } from '@angular/common';
-import { filter } from 'rxjs';
+import { filter, from, concatMap, lastValueFrom } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { AuthService } from '../../core/auth.service';
 import { ToastService } from '../../shared/ui/toast.service';
 import { DialogService } from '../../shared/ui/dialog.service';
-import { Categoria, Despesa, Habitante, Participante } from '../../models/models';
+import { Categoria, Despesa, DespesaAnexo, Habitante, Participante } from '../../models/models';
 
 @Component({
   selector: 'app-despesa-form',
@@ -163,8 +163,57 @@ import { Categoria, Despesa, Habitante, Participante } from '../../models/models
           </div>
         </label>
 
-        <button mat-flat-button class="btn-primary full" type="submit" [disabled]="form.invalid">
-          Guardar
+        <div class="anexos-block">
+          <div class="ct-label">Anexos (faturas / documentos)</div>
+          <p class="help">PDF, imagens ou Excel/Word · máx. 8 MB cada · até 10 ficheiros</p>
+
+          @if (anexos().length) {
+            <ul class="anexo-list">
+              @for (a of anexos(); track a.fileId) {
+                <li>
+                  <button type="button" class="anexo-name" (click)="abrirAnexo(a)">
+                    <mat-icon>{{ iconFor(a.contentType) }}</mat-icon>
+                    <span>{{ a.nome }}</span>
+                  </button>
+                  <button mat-icon-button type="button" aria-label="Remover" (click)="removerAnexo(a)">
+                    <mat-icon>close</mat-icon>
+                  </button>
+                </li>
+              }
+            </ul>
+          }
+
+          @if (pendingFiles().length) {
+            <ul class="anexo-list pending">
+              @for (f of pendingFiles(); track $index) {
+                <li>
+                  <span class="anexo-name static">
+                    <mat-icon>upload_file</mat-icon>
+                    <span>{{ f.name }}</span>
+                  </span>
+                  <button mat-icon-button type="button" aria-label="Remover" (click)="removePending($index)">
+                    <mat-icon>close</mat-icon>
+                  </button>
+                </li>
+              }
+            </ul>
+          }
+
+          <label class="file-pick" [class.disabled]="uploading() || anexos().length + pendingFiles().length >= 10">
+            <mat-icon>attach_file</mat-icon>
+            {{ id() ? 'Adicionar ficheiro' : 'Escolher ficheiros' }}
+            <input
+              type="file"
+              multiple
+              accept=".pdf,image/*,.doc,.docx,.xls,.xlsx"
+              (change)="onFilesSelected($event)"
+              [disabled]="uploading() || anexos().length + pendingFiles().length >= 10"
+            />
+          </label>
+        </div>
+
+        <button mat-flat-button class="btn-primary full" type="submit" [disabled]="form.invalid || uploading()">
+          {{ uploading() ? 'A enviar anexos…' : 'Guardar' }}
         </button>
 
         @if (id() && loaded()?.recorrente) {
@@ -336,6 +385,74 @@ import { Categoria, Despesa, Habitante, Participante } from '../../models/models
         flex-wrap: wrap;
         gap: 8px;
       }
+      .anexos-block {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .anexo-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .anexo-list li {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        background: var(--sand);
+        border-radius: 12px;
+        padding: 4px 4px 4px 10px;
+      }
+      .anexo-name {
+        flex: 1;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border: 0;
+        background: transparent;
+        font: inherit;
+        font-size: 14px;
+        color: inherit;
+        text-align: left;
+        cursor: pointer;
+        min-width: 0;
+      }
+      .anexo-name.static {
+        cursor: default;
+      }
+      .anexo-name span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .anexo-name mat-icon {
+        flex-shrink: 0;
+        font-size: 20px;
+        width: 20px;
+        height: 20px;
+      }
+      .file-pick {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        align-self: flex-start;
+        padding: 10px 14px;
+        border-radius: 12px;
+        background: var(--sand-deep);
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .file-pick.disabled {
+        opacity: 0.5;
+        pointer-events: none;
+      }
+      .file-pick input {
+        display: none;
+      }
     `,
   ],
 })
@@ -353,7 +470,11 @@ export class DespesaFormComponent implements OnInit {
   id = signal<string | null>(null);
   loaded = signal<Despesa | null>(null);
   despesaOrigemId = signal<string | null>(null);
+  pendingFiles = signal<File[]>([]);
+  uploading = signal(false);
   pagamentoValor = 0;
+
+  anexos = computed(() => this.loaded()?.anexos ?? []);
 
   form = this.fb.nonNullable.group({
     descricao: ['', Validators.required],
@@ -473,7 +594,7 @@ export class DespesaFormComponent implements OnInit {
   }
 
   save() {
-    if (this.form.invalid) return;
+    if (this.form.invalid || this.uploading()) return;
     const raw = this.form.getRawValue();
     const body: Record<string, unknown> = {
       descricao: raw.descricao,
@@ -495,17 +616,122 @@ export class DespesaFormComponent implements OnInit {
       ? this.api.updateDespesa(this.id()!, body)
       : this.api.createDespesa(body);
     req.subscribe({
-      next: (d) => {
-        this.toast.success('Despesa guardada');
-        if (this.id()) {
-          this.loaded.set(d);
-          this.form.patchValue({ recorrente: d.recorrente });
+      next: async (d) => {
+        this.loaded.set(d);
+        if (!this.id()) this.id.set(d.id);
+        const pending = this.pendingFiles();
+        if (pending.length) {
+          this.uploading.set(true);
+          try {
+            let last = d;
+            for (const file of pending) {
+              last = await lastValueFrom(this.api.uploadAnexo(d.id, file));
+            }
+            this.loaded.set(last);
+            this.pendingFiles.set([]);
+            this.toast.success('Despesa e anexos guardados');
+          } catch (e: any) {
+            this.toast.error(e?.error?.message || 'Despesa guardada, mas falhou o anexo');
+          } finally {
+            this.uploading.set(false);
+          }
         } else {
-          this.router.navigateByUrl('/despesas');
+          this.toast.success('Despesa guardada');
+        }
+        if (!this.route.snapshot.paramMap.get('id') || this.route.snapshot.paramMap.get('id') === 'nova') {
+          this.router.navigate(['/despesas', d.id], { replaceUrl: true });
+        } else {
+          this.form.patchValue({ recorrente: this.loaded()!.recorrente });
         }
       },
       error: (e) => this.toast.error(e?.error?.message || 'Erro ao guardar'),
     });
+  }
+
+  onFilesSelected(ev: Event) {
+    const input = ev.target as HTMLInputElement;
+    const files = Array.from(input.files || []);
+    input.value = '';
+    if (!files.length) return;
+
+    const room = 10 - this.anexos().length - this.pendingFiles().length;
+    if (room <= 0) {
+      this.toast.error('Máximo de 10 anexos');
+      return;
+    }
+    const take = files.slice(0, room);
+    const tooBig = take.find((f) => f.size > 8 * 1024 * 1024);
+    if (tooBig) {
+      this.toast.error(`"${tooBig.name}" excede 8 MB`);
+      return;
+    }
+
+    const id = this.id();
+    if (id) {
+      this.uploading.set(true);
+      from(take)
+        .pipe(concatMap((file) => this.api.uploadAnexo(id, file)))
+        .subscribe({
+          next: (d) => this.loaded.set(d),
+          error: (e) => {
+            this.uploading.set(false);
+            this.toast.error(e?.error?.message || 'Erro no upload');
+          },
+          complete: () => {
+            this.uploading.set(false);
+            this.toast.success(take.length === 1 ? 'Anexo adicionado' : 'Anexos adicionados');
+          },
+        });
+    } else {
+      this.pendingFiles.update((cur) => [...cur, ...take]);
+    }
+  }
+
+  removePending(index: number) {
+    this.pendingFiles.update((cur) => cur.filter((_, i) => i !== index));
+  }
+
+  iconFor(contentType: string) {
+    if (contentType?.startsWith('image/')) return 'image';
+    if (contentType === 'application/pdf') return 'picture_as_pdf';
+    return 'description';
+  }
+
+  abrirAnexo(a: DespesaAnexo) {
+    const id = this.id();
+    if (!id) return;
+    this.api.downloadAnexo(id, a.fileId).subscribe({
+      next: (res) => {
+        const blob = res.body!;
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank', 'noopener');
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      },
+      error: () => this.toast.error('Não foi possível abrir o anexo'),
+    });
+  }
+
+  removerAnexo(a: DespesaAnexo) {
+    const id = this.id();
+    if (!id) return;
+    this.dialogs
+      .confirm({
+        title: 'Remover anexo?',
+        message: `"${a.nome}" será apagado.`,
+        confirmLabel: 'Remover',
+        tone: 'danger',
+        icon: 'delete_outline',
+      })
+      .pipe(filter(Boolean))
+      .subscribe(() => {
+        this.api.deleteAnexo(id, a.fileId).subscribe({
+          next: (d) => {
+            this.loaded.set(d);
+            this.toast.success('Anexo removido');
+          },
+          error: (e) => this.toast.error(e?.error?.message || 'Erro ao remover'),
+        });
+      });
   }
 
   registarPagamento() {

@@ -48,6 +48,14 @@ export interface Participante {
   pagoEm?: string | null;
 }
 
+export interface DespesaAnexo {
+  fileId: string;
+  nome: string;
+  contentType: string;
+  tamanho: number;
+  uploadedAt?: string;
+}
+
 export interface Despesa {
   id: string;
   descricao: string;
@@ -70,6 +78,7 @@ export interface Despesa {
   estado: 'PAGA' | 'PENDENTE' | 'ANULADA';
   observacoes: string;
   anexoFileId: string | null;
+  anexos?: DespesaAnexo[];
   totalEmDivida?: number;
   participantesQuitados?: number;
 }

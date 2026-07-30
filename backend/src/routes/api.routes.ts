@@ -291,13 +291,48 @@ router.post('/despesas/:id/anexo', upload.single('file'), async (req, res, next)
       req.file.originalname,
       req.file.mimetype
     );
-    const data = await despesaService.setAnexo(
-      req.user!.casaId!,
-      req.user!.userId,
-      paramId(req),
-      fileId
+    try {
+      const data = await despesaService.addAnexo(
+        req.user!.casaId!,
+        req.user!.userId,
+        paramId(req),
+        {
+          fileId,
+          nome: req.file.originalname,
+          contentType: req.file.mimetype,
+          tamanho: req.file.size,
+        }
+      );
+      res.json({ success: true, data });
+    } catch (e) {
+      await despesaService.deleteFromGridFS(fileId.toString()).catch(() => undefined);
+      throw e;
+    }
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/despesas/:id/anexo/:fileId', async (req, res, next) => {
+  try {
+    const despesaId = paramId(req);
+    const fileId = String(req.params.fileId);
+    const meta = await despesaService.findAnexoOnDespesa(req.user!.casaId!, despesaId, fileId);
+    const file = await despesaService.getGridFSFile(fileId);
+    const contentType =
+      meta.contentType ||
+      file.contentType ||
+      file.metadata?.contentType ||
+      'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(meta.nome || file.filename || 'anexo')}"`
     );
-    res.json({ success: true, data });
+    if (file.length) res.setHeader('Content-Length', String(file.length));
+    const stream = despesaService.openDownloadStream(fileId);
+    stream.on('error', next);
+    stream.pipe(res);
   } catch (e) {
     next(e);
   }
@@ -306,12 +341,40 @@ router.post('/despesas/:id/anexo', upload.single('file'), async (req, res, next)
 router.get('/despesas/:id/anexo', async (req, res, next) => {
   try {
     const d = await despesaService.getDespesa(req.user!.casaId!, paramId(req));
-    if (!d.anexoFileId) {
+    const first = d.anexos?.[0];
+    if (!first?.fileId) {
       return res.status(404).json({ success: false, message: 'Sem anexo' });
     }
-    const stream = despesaService.openDownloadStream(d.anexoFileId);
+    const file = await despesaService.getGridFSFile(first.fileId);
+    const contentType =
+      first.contentType ||
+      file.contentType ||
+      file.metadata?.contentType ||
+      'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(first.nome || file.filename || 'anexo')}"`
+    );
+    const stream = despesaService.openDownloadStream(first.fileId);
     stream.on('error', next);
     stream.pipe(res);
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.delete('/despesas/:id/anexo/:fileId', async (req, res, next) => {
+  try {
+    res.json({
+      success: true,
+      data: await despesaService.removeAnexo(
+        req.user!.casaId!,
+        req.user!.userId,
+        paramId(req),
+        String(req.params.fileId)
+      ),
+    });
   } catch (e) {
     next(e);
   }

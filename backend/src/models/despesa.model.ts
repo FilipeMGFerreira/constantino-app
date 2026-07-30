@@ -13,6 +13,15 @@ export interface IParticipante {
   pagoEm?: Date | null;
 }
 
+export interface IAnexo {
+  fileId: Types.ObjectId;
+  nome: string;
+  contentType: string;
+  tamanho: number;
+  uploadedAt: Date;
+  uploadedBy?: Types.ObjectId;
+}
+
 export interface IDespesa extends Document {
   casaId: Types.ObjectId;
   descricao: string;
@@ -31,7 +40,9 @@ export interface IDespesa extends Document {
   despesaOrigemId?: Types.ObjectId;
   estado: EstadoDespesa;
   observacoes: string;
+  /** @deprecated preferir `anexos` */
   anexoFileId?: Types.ObjectId;
+  anexos: IAnexo[];
   createdBy: Types.ObjectId;
   updatedBy?: Types.ObjectId;
   createdAt: Date;
@@ -45,6 +56,18 @@ const participanteSchema = new Schema<IParticipante>(
     valor: { type: Number, required: true },
     valorPago: { type: Number, default: 0, min: 0 },
     pagoEm: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
+const anexoSchema = new Schema<IAnexo>(
+  {
+    fileId: { type: Schema.Types.ObjectId, required: true },
+    nome: { type: String, required: true, trim: true },
+    contentType: { type: String, required: true },
+    tamanho: { type: Number, required: true, min: 0 },
+    uploadedAt: { type: Date, default: Date.now },
+    uploadedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   { _id: false }
 );
@@ -84,6 +107,7 @@ const despesaSchema = new Schema<IDespesa>(
     },
     observacoes: { type: String, default: '' },
     anexoFileId: { type: Schema.Types.ObjectId },
+    anexos: { type: [anexoSchema], default: [] },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },

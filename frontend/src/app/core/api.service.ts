@@ -107,6 +107,19 @@ export class ApiService {
     return this.http.post<ApiResponse<Despesa>>(`${this.base}/despesas/${id}/anexo`, fd).pipe(map((r) => r.data));
   }
 
+  downloadAnexo(id: string, fileId: string) {
+    return this.http.get(`${this.base}/despesas/${id}/anexo/${fileId}`, {
+      responseType: 'blob',
+      observe: 'response',
+    });
+  }
+
+  deleteAnexo(id: string, fileId: string) {
+    return this.http
+      .delete<ApiResponse<Despesa>>(`${this.base}/despesas/${id}/anexo/${fileId}`)
+      .pipe(map((r) => r.data));
+  }
+
   getDashboard(mes?: number, ano?: number) {
     let params = new HttpParams();
     if (mes != null) params = params.set('mes', String(mes));

@@ -75,6 +75,9 @@ import { Despesa } from '../../models/models';
                   } @else if (d.despesaOrigemId) {
                     <span class="chip mode">Cópia</span>
                   }
+                  @if ((d.anexos?.length || 0) > 0 || d.anexoFileId) {
+                    <span class="chip mode"><mat-icon class="chip-ico">attach_file</mat-icon> {{ d.anexos?.length || 1 }}</span>
+                  }
                 </div>
               </div>
               <strong>{{ d.valor | currency: 'EUR' }}</strong>
@@ -179,6 +182,13 @@ import { Despesa } from '../../models/models';
       .chip.mode {
         background: var(--sand-deep);
         color: var(--ink-soft);
+      }
+      .chip-ico {
+        font-size: 14px !important;
+        width: 14px !important;
+        height: 14px !important;
+        vertical-align: -2px;
+        margin-right: 2px;
       }
       strong {
         font-family: var(--font-display);

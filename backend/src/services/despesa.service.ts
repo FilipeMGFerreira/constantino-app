@@ -15,6 +15,27 @@ function habitanteIdsOf(d: IDespesa): string[] {
   return [...new Set(ids)];
 }
 
+function serializeAnexos(d: IDespesa) {
+  const list = (d.anexos || []).map((a) => ({
+    fileId: a.fileId.toString(),
+    nome: a.nome,
+    contentType: a.contentType,
+    tamanho: a.tamanho,
+    uploadedAt: a.uploadedAt,
+  }));
+  // legacy single anexoFileId
+  if (list.length === 0 && d.anexoFileId) {
+    list.push({
+      fileId: d.anexoFileId.toString(),
+      nome: 'Anexo',
+      contentType: 'application/octet-stream',
+      tamanho: 0,
+      uploadedAt: d.updatedAt || d.createdAt,
+    });
+  }
+  return list;
+}
+
 function serialize(d: IDespesa, cat?: { nome?: string; icone?: string; cor?: string } | null) {
   const modo = d.modoPagamento || 'ADIANTADO';
   const participantes = d.participantes.map((p) => {
@@ -28,6 +49,7 @@ function serialize(d: IDespesa, cat?: { nome?: string; icone?: string; cor?: str
       pagoEm: p.pagoEm ?? null,
     };
   });
+  const anexos = serializeAnexos(d);
 
   return {
     id: d._id.toString(),
@@ -51,7 +73,8 @@ function serialize(d: IDespesa, cat?: { nome?: string; icone?: string; cor?: str
     despesaOrigemId: d.despesaOrigemId?.toString() ?? null,
     estado: d.estado,
     observacoes: d.observacoes,
-    anexoFileId: d.anexoFileId?.toString() ?? null,
+    anexoFileId: anexos[0]?.fileId ?? null,
+    anexos,
     createdBy: d.createdBy.toString(),
     updatedBy: d.updatedBy?.toString(),
     createdAt: d.createdAt,
@@ -220,6 +243,7 @@ export async function createDespesa(casaId: string, userId: string, data: Despes
         : undefined,
     estado,
     observacoes: data.observacoes ?? '',
+    anexos: [],
     createdBy: userId,
   });
 
@@ -481,13 +505,128 @@ export async function duplicarDespesa(casaId: string, userId: string, id: string
   });
 }
 
-export async function setAnexo(casaId: string, userId: string, id: string, fileId: Types.ObjectId) {
+export const ANEXO_MAX = 10;
+export const ANEXO_MIME_ALLOWED = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+  'image/gif',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/octet-stream',
+]);
+
+const ANEXO_EXT_ALLOWED = /\.(pdf|jpe?g|png|webp|gif|heic|heif|doc|docx|xls|xlsx)$/i;
+
+function isAnexoAllowed(contentType: string, nome: string) {
+  if (ANEXO_MIME_ALLOWED.has(contentType) && contentType !== 'application/octet-stream') return true;
+  return ANEXO_EXT_ALLOWED.test(nome);
+}
+
+export async function addAnexo(
+  casaId: string,
+  userId: string,
+  id: string,
+  meta: {
+    fileId: Types.ObjectId;
+    nome: string;
+    contentType: string;
+    tamanho: number;
+  }
+) {
   const doc = await Despesa.findOne({ _id: id, casaId });
   if (!doc) throw new NotFoundError('Despesa não encontrada');
-  doc.anexoFileId = fileId;
+  if (doc.estado === 'ANULADA') throw new ValidationError('Despesa anulada');
+
+  if (!isAnexoAllowed(meta.contentType, meta.nome)) {
+    throw new ValidationError('Tipo de ficheiro não permitido (PDF, imagem ou Office)');
+  }
+
+  if (!doc.anexos) doc.anexos = [];
+  // migrate legacy
+  if (doc.anexoFileId && doc.anexos.length === 0) {
+    doc.anexos.push({
+      fileId: doc.anexoFileId,
+      nome: 'Anexo',
+      contentType: 'application/octet-stream',
+      tamanho: 0,
+      uploadedAt: doc.updatedAt || new Date(),
+      uploadedBy: doc.updatedBy,
+    });
+  }
+
+  if (doc.anexos.length >= ANEXO_MAX) {
+    throw new ValidationError(`Máximo de ${ANEXO_MAX} anexos por despesa`);
+  }
+
+  doc.anexos.push({
+    fileId: meta.fileId,
+    nome: meta.nome.slice(0, 180),
+    contentType: meta.contentType,
+    tamanho: meta.tamanho,
+    uploadedAt: new Date(),
+    uploadedBy: new Types.ObjectId(userId),
+  });
+  doc.anexoFileId = doc.anexos[0]?.fileId;
   doc.updatedBy = new Types.ObjectId(userId);
   await doc.save();
   return serialize(doc);
+}
+
+/** @deprecated use addAnexo */
+export async function setAnexo(casaId: string, userId: string, id: string, fileId: Types.ObjectId) {
+  return addAnexo(casaId, userId, id, {
+    fileId,
+    nome: 'Anexo',
+    contentType: 'application/octet-stream',
+    tamanho: 0,
+  });
+}
+
+export async function removeAnexo(casaId: string, userId: string, id: string, fileId: string) {
+  const doc = await Despesa.findOne({ _id: id, casaId });
+  if (!doc) throw new NotFoundError('Despesa não encontrada');
+
+  if (!doc.anexos) doc.anexos = [];
+  if (doc.anexoFileId && doc.anexos.length === 0) {
+    doc.anexos.push({
+      fileId: doc.anexoFileId,
+      nome: 'Anexo',
+      contentType: 'application/octet-stream',
+      tamanho: 0,
+      uploadedAt: doc.updatedAt || new Date(),
+    });
+  }
+
+  const before = doc.anexos.length;
+  doc.anexos = doc.anexos.filter((a) => a.fileId.toString() !== fileId);
+  if (doc.anexos.length === before) throw new NotFoundError('Anexo não encontrado');
+
+  doc.anexoFileId = doc.anexos[0]?.fileId;
+  doc.updatedBy = new Types.ObjectId(userId);
+  await doc.save();
+
+  try {
+    await deleteFromGridFS(fileId);
+  } catch {
+    // ficheiro já ausente — ok
+  }
+
+  return serialize(doc);
+}
+
+export async function findAnexoOnDespesa(casaId: string, despesaId: string, fileId: string) {
+  const doc = await Despesa.findOne({ _id: despesaId, casaId });
+  if (!doc) throw new NotFoundError('Despesa não encontrada');
+  const anexos = serializeAnexos(doc);
+  const meta = anexos.find((a) => a.fileId === fileId);
+  if (!meta) throw new NotFoundError('Anexo não encontrado');
+  return meta;
 }
 
 export async function gerarRecorrentes() {
@@ -578,4 +717,25 @@ export function openDownloadStream(fileId: string) {
     bucketName: 'anexos',
   });
   return bucket.openDownloadStream(new Types.ObjectId(fileId));
+}
+
+export async function getGridFSFile(fileId: string) {
+  const db = mongoose.connection.db!;
+  const files = db.collection('anexos.files');
+  const file = await files.findOne({ _id: new Types.ObjectId(fileId) });
+  if (!file) throw new NotFoundError('Ficheiro não encontrado');
+  return file as {
+    _id: Types.ObjectId;
+    filename: string;
+    length: number;
+    contentType?: string;
+    metadata?: { contentType?: string };
+  };
+}
+
+export async function deleteFromGridFS(fileId: string) {
+  const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db!, {
+    bucketName: 'anexos',
+  });
+  await bucket.delete(new Types.ObjectId(fileId));
 }
