@@ -120,7 +120,7 @@ export class LoginComponent {
     this.auth.login(this.form.getRawValue()).subscribe({
       next: () => {
         this.loading.set(false);
-        this.router.navigateByUrl(this.auth.casa() ? '/dashboard' : '/onboarding');
+        this.router.navigateByUrl(this.auth.hasCasa ? '/' : '/onboarding');
       },
       error: (e) => {
         this.loading.set(false);

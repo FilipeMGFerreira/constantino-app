@@ -19,6 +19,14 @@ export const casaGuard: CanActivateFn = () => {
   return true;
 };
 
+export const onboardingGuard: CanActivateFn = () => {
+  const auth = inject(AuthService);
+  const router = inject(Router);
+  if (!auth.isLoggedIn) return router.createUrlTree(['/login']);
+  if (auth.hasCasa) return router.createUrlTree(['/']);
+  return true;
+};
+
 export const guestGuard: CanActivateFn = () => {
   const auth = inject(AuthService);
   const router = inject(Router);

@@ -213,7 +213,7 @@ export class OnboardingComponent {
       next: () => {
         this.loading.set(false);
         this.toast.success('Casa criada');
-        this.router.navigateByUrl('/dashboard');
+        this.router.navigateByUrl('/');
       },
       error: (e) => {
         this.loading.set(false);
@@ -229,7 +229,7 @@ export class OnboardingComponent {
       next: () => {
         this.loading.set(false);
         this.toast.success('Entrou na casa');
-        this.router.navigateByUrl('/dashboard');
+        this.router.navigateByUrl('/');
       },
       error: (e) => {
         this.loading.set(false);
