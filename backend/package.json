@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "dev:mem": "tsx watch src/server-mem.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "seed": "tsx src/scripts/seed.ts",
     "test": "jest --runInBand",

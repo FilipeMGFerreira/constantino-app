@@ -414,9 +414,11 @@ export async function uploadToGridFS(
   });
 
   return new Promise((resolve, reject) => {
-    const uploadStream = bucket.openUploadStream(filename, { contentType });
+    const uploadStream = bucket.openUploadStream(filename, { contentType }) as NodeJS.WritableStream & {
+      id: Types.ObjectId;
+    };
     uploadStream.on('error', reject);
-    uploadStream.on('finish', () => resolve(uploadStream.id as Types.ObjectId));
+    uploadStream.on('finish', () => resolve(uploadStream.id));
     uploadStream.end(buffer);
   });
 }
