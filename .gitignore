@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+uploads/
+coverage/
+.angular/
+frontend/ios/
+frontend/android/
+frontend/www/
+*.tsbuildinfo
+backend-tsc.txt
+backend-test-out.txt
+frontend-build.txt
+tsc-out.txt
+backend/npm-test-output.txt
